@@ -1,0 +1,10 @@
+[project]
+name = "digitnet"
+version = "0.1.0"
+description = "A neural network built from scratch in NumPy, with a draw-a-digit browser demo"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scikit-learn", "matplotlib"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
