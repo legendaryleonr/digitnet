@@ -1,0 +1,11 @@
+{
+  "digitnet_test_acc": 0.9917,
+  "logistic_regression_test_acc": 0.9667,
+  "sklearn_mlp_test_acc": 0.9722,
+  "best_val_acc": 0.9954,
+  "epochs": 150,
+  "train_seconds": 2.7,
+  "n_train": 1221,
+  "n_val": 216,
+  "n_test": 360
+}
