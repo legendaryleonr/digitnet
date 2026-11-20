@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DigitNet: a neural net from scratch</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --text:#e8eaf0; --muted:#8b93a7; --accent:#76b900; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+         background:var(--bg); color:var(--text); display:flex; justify-content:center; padding:32px 16px; }
+  main { width:100%; max-width:860px; }
+  h1 { font-size:26px; margin:0 0 4px; letter-spacing:-0.01em; }
+  .sub { color:var(--muted); margin:0 0 24px; font-size:14px; line-height:1.5; }
+  .grid { display:grid; grid-template-columns: 300px 1fr; gap:20px; }
+  @media (max-width:700px){ .grid{ grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .label { font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); margin-bottom:10px; }
+  canvas#pad { width:268px; height:268px; background:#000; border-radius:8px; touch-action:none; cursor:crosshair; display:block; }
+  button { margin-top:12px; width:100%; padding:10px; border-radius:8px; border:1px solid var(--line);
+           background:#20242d; color:var(--text); font-size:14px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  .pred { display:flex; align-items:baseline; gap:12px; margin-bottom:14px; }
+  .pred .digit { font-size:64px; font-weight:700; line-height:1; color:var(--accent); min-width:44px; }
+  .pred .conf { color:var(--muted); font-size:14px; }
+  .bar { display:grid; grid-template-columns:16px 1fr 48px; align-items:center; gap:8px; font-size:13px; margin:4px 0; }
+  .track { height:10px; background:#232833; border-radius:5px; overflow:hidden; }
+  .fill { height:100%; width:0; background:#4a5263; transition:width .15s; }
+  .bar.top .fill { background:var(--accent); }
+  .num { color:var(--muted); text-align:right; font-variant-numeric:tabular-nums; }
+  .row2 { display:flex; gap:20px; margin-top:20px; flex-wrap:wrap; }
+  canvas#small { width:96px; height:96px; image-rendering:pixelated; border-radius:6px; background:#000; }
+  .note { color:var(--muted); font-size:13px; line-height:1.55; flex:1; min-width:220px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>DigitNet</h1>
+  <p class="sub">A neural network written from scratch in NumPy (no PyTorch or TensorFlow), trained on handwritten digits.
+    The trained weights are loaded here and the forward pass runs in your browser.</p>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Draw a digit (0–9)</div>
+      <canvas id="pad" width="268" height="268"></canvas>
+      <button id="clear">Clear</button>
+    </div>
+    <div class="card">
+      <div class="label">Prediction</div>
+      <div class="pred"><div class="digit" id="digit">–</div><div class="conf" id="conf">draw something</div></div>
+      <div id="bars"></div>
+    </div>
+  </div>
+
+  <div class="row2 card">
+    <div>
+      <div class="label">What the network sees</div>
+      <canvas id="small" width="8" height="8"></canvas>
+    </div>
+    <p class="note">Your drawing is cropped, centered and shrunk to an 8×8 grid, the same format as the training data.
+      That's only 64 numbers going in. They pass through two hidden layers (128 and 64 ReLU units) and a softmax
+      that turns 10 scores into probabilities. <span id="acc"></span></p>
+  </div>
+</main>
+
+<script>
+const pad = document.getElementById("pad"), ctx = pad.getContext("2d");
+const small = document.getElementById("small"), sctx = small.getContext("2d");
+let net = null, drawing = false, last = null;
+
+function resetPad() { ctx.fillStyle = "#000"; ctx.fillRect(0, 0, pad.width, pad.height); }
+resetPad();
+ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 22;
+
+function pos(e) {
+  const r = pad.getBoundingClientRect();
+  return [(e.clientX - r.left) * pad.width / r.width, (e.clientY - r.top) * pad.height / r.height];
+}
+pad.addEventListener("pointerdown", e => { drawing = true; last = pos(e); pad.setPointerCapture(e.pointerId); stroke(e); });
+pad.addEventListener("pointermove", e => { if (drawing) stroke(e); });
+pad.addEventListener("pointerup", () => { drawing = false; predict(); });
+function stroke(e) {
+  const p = pos(e);
+  ctx.beginPath(); ctx.moveTo(last[0], last[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
+  last = p; predict();
+}
+document.getElementById("clear").onclick = () => { resetPad(); render(null); sctx.clearRect(0,0,8,8); };
+
+// Turn the drawing into 64 numbers in 0..1, mimicking how the dataset was made:
+// crop to the ink, fit it into a 32x32 box, then average 4x4 blocks down to 8x8.
+function toInput() {
+  const { data, width, height } = ctx.getImageData(0, 0, pad.width, pad.height);
+  let x0 = width, y0 = height, x1 = -1, y1 = -1;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++)
+    if (data[(y * width + x) * 4] > 40) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+  if (x1 < 0) return null;
+  const w = x1 - x0 + 1, h = y1 - y0 + 1, s = 28 / Math.max(w, h);
+  const tmp = document.createElement("canvas"); tmp.width = tmp.height = 32;
+  const t = tmp.getContext("2d"); t.fillStyle = "#000"; t.fillRect(0, 0, 32, 32);
+  t.imageSmoothingEnabled = true;
+  t.drawImage(pad, x0, y0, w, h, (32 - w * s) / 2, (32 - h * s) / 2, w * s, h * s);
+  const px = t.getImageData(0, 0, 32, 32).data, out = new Array(64).fill(0);
+  for (let by = 0; by < 8; by++) for (let bx = 0; bx < 8; bx++) {
+    let sum = 0;
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) sum += px[((by * 4 + y) * 32 + bx * 4 + x) * 4];
+    out[by * 8 + bx] = Math.min(1, sum / 16 / 255 * 1.6);
+  }
+  return out;
+}
+
+// Forward pass: same math as Sequential.forward in Python (Dropout is off at inference).
+function forward(x) {
+  let a = x;
+  net.layers.forEach((L, i) => {
+    const nOut = L.b.length, z = new Array(nOut);
+    for (let j = 0; j < nOut; j++) { let s = L.b[j]; for (let k = 0; k < a.length; k++) s += a[k] * L.W[k][j]; z[j] = s; }
+    a = i < net.layers.length - 1 ? z.map(v => Math.max(0, v)) : z;
+  });
+  const m = Math.max(...a), e = a.map(v => Math.exp(v - m)), sum = e.reduce((p, q) => p + q, 0);
+  return e.map(v => v / sum);
+}
+
+function predict() {
+  if (!net) return;
+  const x = toInput(); if (!x) return;
+  const img = sctx.createImageData(8, 8);
+  x.forEach((v, i) => { const c = Math.round(v * 255); img.data.set([c, c, c, 255], i * 4); });
+  sctx.putImageData(img, 0, 0);
+  render(forward(x));
+}
+
+const bars = document.getElementById("bars");
+for (let d = 0; d < 10; d++) bars.insertAdjacentHTML("beforeend",
+  `<div class="bar" id="b${d}"><span>${d}</span><div class="track"><div class="fill"></div></div><span class="num">0%</span></div>`);
+function render(p) {
+  const top = p ? p.indexOf(Math.max(...p)) : -1;
+  document.getElementById("digit").textContent = p ? top : "–";
+  document.getElementById("conf").textContent = p ? `${(p[top] * 100).toFixed(1)}% confident` : "draw something";
+  for (let d = 0; d < 10; d++) {
+    const el = document.getElementById("b" + d), v = p ? p[d] : 0;
+    el.classList.toggle("top", d === top);
+    el.querySelector(".fill").style.width = (v * 100) + "%";
+    el.querySelector(".num").textContent = (v * 100).toFixed(1) + "%";
+  }
+}
+
+fetch("weights.json").then(r => r.json()).then(j => {
+  net = j;
+  if (j.meta && j.meta.test_acc) document.getElementById("acc").textContent =
+    `Test accuracy on held-out digits: ${(j.meta.test_acc * 100).toFixed(1)}%.`;
+}).catch(() => { document.getElementById("conf").textContent = "couldn't load weights.json (run train.py)"; });
+</script>
+</body>
+</html>
