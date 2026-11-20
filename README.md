@@ -4,7 +4,7 @@ A small neural network library written from scratch in NumPy (no PyTorch or Tens
 
 The goal was to understand what deep learning frameworks actually do under the hood: forward passes, backpropagation, and optimizers like Adam. That meant implementing them myself and checking the math with numerical gradient tests.
 
-[**Live demo: draw a digit**](#demo) · 99.2% test accuracy · trains in \~2 seconds on a laptop CPU
+**[Live demo: draw a digit](https://legendaryleonr.github.io/digitnet)** · 99.2% test accuracy · trains in \~2 seconds on a laptop CPU
 
 ![Training curves](results/training_curves.png)
 
@@ -51,7 +51,7 @@ cd demo && python -m http.server 8000
 # visit http://localhost:8000
 ```
 
-## Demo {#demo}
+## Demo
 
 The demo crops your drawing to the ink, fits it into a 32×32 box, and averages 4×4 blocks down to 8×8, which is roughly how the original dataset was made. It then runs the same forward pass as the Python code. I checked that the JavaScript version gets the same predictions as the Python one on real dataset images.
 
